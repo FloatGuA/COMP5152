@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Data — raw archive, too large for git
+archive/
+archive.zip
+output/
+
+# Trained model cache
+models/
+
+# Experiment outputs (regenerable)
+results/
+
+# OS
+.DS_Store
+Thumbs.db

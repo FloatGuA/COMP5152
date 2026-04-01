@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python filter_datasets.py)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(where python3.11 python3.12 python3.10)",
+      "Bash(py -0)",
+      "Bash(shuf)"
+    ]
+  }
+}
