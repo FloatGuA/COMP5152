@@ -93,3 +93,39 @@
 - Task 4：统一评估模块（data_group 1yr/5yr/full + composite score + heatmap）
 - LSTM 训练曲线（lstm_curve_*.csv）本次实验未生成，因为跑的是旧代码；重跑后会有
 - 最终报告撰写
+
+---
+
+## #4 · 2026-04-02 10:49 — 数据清洗、数据目录重构、报告生成、GPU 修复
+
+**触发原因**：用户要求（auto-compact 前留痕）
+
+### 概述
+本次会话完成了多个工程和报告任务。新增数据清洗模块（pd.bdate_range forward-fill），将数据读取从 archive/ 迁移至 selected_data/ 专用目录，放弃 1yr/5yr 数据分组维度（设计改为 composite score 热力图），新建项目级 skill COMP5152-report-writer 并生成初版 report.md，最后修复 PyTorch GPU 支持（RTX 5070 CUDA 12.8）。
+
+### 改动清单
+
+**数据与清洗**
+- `src/data_cleaner.py`：新建，pd.bdate_range 检测缺失交易日，forward-fill，区分真实 gap 与节假日
+- `src/data_loader.py`：集成 clean_series，读取路径从 archive/ 改为 selected_data/，移除 1yr/5yr 相关代码
+- `selected_data/`：新建目录，复制 6 只资产 CSV（stocks: CLI/ALCO/ACCO，etfs: DWM/CHII/BND）
+
+**实验与可视化**
+- `run_experiment.py`：移除 GROUPS 循环，恢复单组 24 tasks，metrics.csv 去掉 data_group 列
+- `plot_results.py`：移除 group_mape 图，新增 composite score heatmap（model × symbol）
+
+**文档与报告**
+- `.gitignore`：新建，忽略 archive/、output/、models/、results/、__pycache__/
+- `README.md`：新建，中英双语，含安装、使用、目录结构、技术栈
+- `report.md`：新建，初版完整报告（5只资产数据，BND 待重跑后更新）
+- `.claude/skills/COMP5152-report-writer/SKILL.md`：新建项目级 skill
+
+### 决策与背景
+- 放弃 1yr/5yr 数据分组：原设计"截取最后 N 行"会丢弃大量有效训练数据，与"尽量多用数据"的原则相悖。正确做法应是固定 test 窗口，但讨论后决定直接去掉这个维度，保持实验简洁。
+- selected_data/ 而非继续用 archive/：明确区分原始数据（archive/）与实验用数据（selected_data/），便于 git 管理（selected_data/ 纳入版本控制，archive/ 不纳入）。
+- PyTorch CPU → CUDA：已有 RTX 5070，驱动 CUDA 13.1，但装的是 cpu-only torch。强制重装 cu128 版后 GPU 识别正常，LSTM 训练将自动使用 GPU。
+
+### 未完成 / 待跟进
+- 用 BND 替换 CEZ 后重跑实验（现有 models/ 缓存含 CEZ，BND 需全量重训）
+- 重跑后触发 COMP5152-report-writer 更新 report.md Section 4 数据表格
+- models/ 缓存需清理旧 CEZ 缓存文件后重跑

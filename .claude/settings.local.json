@@ -6,7 +6,17 @@
       "Bash(pip install:*)",
       "Bash(where python3.11 python3.12 python3.10)",
       "Bash(py -0)",
-      "Bash(shuf)"
+      "Bash(shuf)",
+      "Bash(nvidia-smi)",
+      "Bash(rm -f C:/Coding/COMP5152/models/*)",
+      "Bash(rm -f C:/Coding/COMP5152/results/*)",
+      "Read(//tmp/**)",
+      "Bash(cp output/A/stocks/AAPL.csv selected_data/stocks/)",
+      "Bash(cp output/A/stocks/ADP.csv selected_data/stocks/)",
+      "Bash(cp output/A/stocks/AEP.csv selected_data/stocks/)",
+      "Bash(cp output/A/stocks/AFL.csv selected_data/stocks/)",
+      "Bash(cp output/A/stocks/AIG.csv selected_data/stocks/)",
+      "Bash(taskkill:*)"
     ]
   }
 }

@@ -3,10 +3,11 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 from pathlib import Path
 from src.model_cache import is_valid, save_lstm, load_lstm
+from src.seed import set_seed, SEED
 
 WINDOW   = 60
 EPOCHS   = 100
@@ -56,11 +57,12 @@ def predict(
     train_end = str(train.index[-1].date())
     val_end   = str(val.index[-1].date())
 
-    scaler  = MinMaxScaler()
+    scaler  = StandardScaler()
     train_s = scaler.fit_transform(train.values.reshape(-1, 1))
     val_s   = scaler.transform(val.values.reshape(-1, 1))
     test_s  = scaler.transform(test.values.reshape(-1, 1))
 
+    set_seed(SEED)
     model = LSTMNet().to(DEVICE)
 
     if is_valid(symbol, MODEL_NAME, train_end, val_end):
@@ -100,7 +102,7 @@ def predict(
                 xb  = _to_tensor(X_train[idx])
                 yb  = _to_tensor(y_train[idx])
                 optimizer.zero_grad()
-                loss = loss_fn(model(xb).squeeze(), yb)
+                loss = loss_fn(model(xb).squeeze(), yb.squeeze())
                 loss.backward()
                 optimizer.step()
                 batch_loss += loss.item()
@@ -110,7 +112,7 @@ def predict(
             with torch.no_grad():
                 val_loss = loss_fn(
                     model(_to_tensor(X_val)).squeeze(),
-                    _to_tensor(y_val)
+                    _to_tensor(y_val).squeeze()
                 ).item()
 
             train_loss = batch_loss / max(n_batches, 1)
@@ -153,7 +155,7 @@ def predict(
     model.eval()
     context_s = np.concatenate([train_s[-WINDOW:], val_s, test_s])
     X_test, _ = _make_sequences(context_s, WINDOW)
-    X_test    = X_test[:len(test)]
+    X_test    = X_test[len(val_s):]   # skip val-period sequences, keep test-period only
 
     with torch.no_grad():
         preds_s = model(_to_tensor(X_test)).cpu().numpy()

@@ -1,15 +1,32 @@
 import pandas as pd
 from pathlib import Path
+from src.data_cleaner import clean_series
 
 DATA_DIR = Path("C:/Coding/COMP5152/selected_data")
 
 SELECTED = [
+    # Original 6
     ("stocks", "CLI"),
     ("stocks", "ALCO"),
     ("stocks", "ACCO"),
     ("etfs",   "DWM"),
     ("etfs",   "CHII"),
     ("etfs",   "BND"),
+    # Extended set — diverse sectors
+    ("stocks", "AAPL"),   # Technology
+    ("stocks", "AMD"),    # Semiconductor
+    ("stocks", "AMAT"),   # Semiconductor equipment
+    ("stocks", "ADBE"),   # Software
+    ("stocks", "ADP"),    # Business services
+    ("stocks", "ABT"),    # Healthcare
+    ("stocks", "AMGN"),   # Biotech
+    ("stocks", "AFL"),    # Insurance
+    # AIG excluded: catastrophic 2008 crisis (~$70→$1), severe distribution shift
+    # AON excluded: anomalous results, removing from experiment
+    ("stocks", "AEP"),    # Utilities
+    ("stocks", "AN"),     # Auto retail
+    ("etfs",   "BIV"),    # Intermediate bond
+    ("etfs",   "ACWX"),   # International equity ex-US
 ]
 
 
@@ -18,6 +35,7 @@ def load_close(category: str, symbol: str) -> pd.Series:
     df = pd.read_csv(path, parse_dates=["Date"], index_col="Date")
     series = df["Close"].sort_index().dropna()
     series.name = symbol
+    series = clean_series(series)
     return series
 
 
