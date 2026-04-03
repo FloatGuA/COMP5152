@@ -103,7 +103,128 @@ Temporal ordering is mandatory for financial time series to prevent look-ahead b
 
 ---
 
-## 3. Analysis Steps and Trials
+## 3. Model Descriptions
+
+### 3.1 Linear Regression (LR)
+
+**Principle.** Ordinary Least Squares (OLS) regression finds a linear mapping from a fixed feature vector to the next-day close price. The assumption is that price-relevant information can be summarised as a weighted sum of recent price levels, moving averages, and short-term returns.
+
+**Feature engineering.** Seven hand-crafted features are constructed from the close price series:
+
+| Feature | Formula | Intuition |
+|---------|---------|-----------|
+| `lag_1` | Close(t−1) | Yesterday's price — dominant predictor |
+| `lag_5` | Close(t−5) | One-week-ago price |
+| `lag_20` | Close(t−20) | One-month-ago price |
+| `MA7` | Mean(Close, 7d) | Short-term moving average |
+| `MA30` | Mean(Close, 30d) | Medium-term moving average |
+| `ret_1d` | (Close(t) − Close(t−1)) / Close(t−1) | Yesterday's 1-day return |
+| `ret_5d` | (Close(t) − Close(t−5)) / Close(t−5) | 5-day cumulative return |
+
+All features are standardised with `StandardScaler` (zero mean, unit variance) fitted on training data only. The target is the **next-day** Close (`shift(-1)`); using same-day Close would create a data leakage where `lag_1 ≈ target`, yielding artificially low error (Flaw 1, Section 4.1 below).
+
+**Implementation.** `sklearn.linear_model.LinearRegression`. No hyperparameters to tune. The model is fitted once on the training set and applied directly to the test set without retraining.
+
+**Advantages.** Extremely fast (< 0.1 s), fully interpretable (inspect coefficients), no risk of overfitting on the test set. Provides a transparent baseline.
+
+**Limitations.** Strictly linear — cannot capture non-linear price dynamics or long-range temporal dependencies. The feature set is manually designed; relevant patterns not encoded in these 7 features are invisible to the model. In practice, the coefficient on `lag_1` dominates (~1.0), meaning the model degenerates to predicting "tomorrow ≈ today" (random walk).
+
+---
+
+### 3.2 ARIMA
+
+**Principle.** ARIMA (AutoRegressive Integrated Moving Average) is a classical statistical model for univariate time series. It combines three components:
+
+- **AR(p)** — AutoRegressive: the current value is modelled as a linear combination of its *p* most recent values. Captures momentum and mean-reversion patterns.
+- **I(d)** — Integrated: the series is differenced *d* times to achieve stationarity. For financial prices, `d=1` (first difference = daily returns) is standard and removes the unit root.
+- **MA(q)** — Moving Average: the current value includes a weighted sum of the *q* most recent forecast errors. Captures residual autocorrelation not explained by the AR component.
+
+The combined model is written ARIMA(p, d, q). For financial prices, the model is applied to the differenced series, effectively forecasting day-to-day changes and then integrating back to price levels.
+
+**Parameter selection.** `pmdarima.auto_arima` performs a stepwise AIC-minimising search over (p, q) combinations with `d=1` fixed, `max_p=5`, `max_q=5`. Across all 18 assets, the selected order is consistently ARIMA(0,1,0) or very low-order — the canonical discrete random walk.
+
+**Implementation.** Rolling one-step evaluation: at each test step, predict one step ahead, then call `model.update([true_value])` to incorporate the new observation. Every 20 steps, `auto_arima` is called on the full expanded history to allow the order to adapt. The 20-step interval is a trade-off between adaptability and runtime (full refit dominates cost).
+
+**Advantages.** Principled handling of non-stationarity via differencing; no manual feature engineering; well-understood theoretical properties; consistent performance regardless of price trend direction or magnitude.
+
+**Limitations.** Assumes linear relationships between current and past values. Computationally expensive under rolling refit: each `auto_arima` call evaluates multiple (p,q) combinations, making evaluation on long test sets (1,000+ rows) take 15–35 minutes. Purely univariate — cannot incorporate exogenous variables.
+
+---
+
+### 3.3 Prophet
+
+**Principle.** Prophet (Taylor & Letham, 2018) is a decomposable additive time-series model developed at Facebook:
+
+```
+y(t) = trend(t) + seasonality(t) + holidays(t) + ε(t)
+```
+
+- **Trend**: a piecewise linear or logistic growth curve with automatically detected changepoints.
+- **Seasonality**: Fourier series approximating weekly and yearly cycles.
+- **Holidays**: user-supplied date effects (here: US federal holidays).
+
+Parameters are estimated via MAP optimisation using Stan (L-BFGS).
+
+**Key parameters in this implementation.**
+- `weekly_seasonality=True`: models a 7-day cycle with a Fourier order of 3.
+- `yearly_seasonality=True`: models a 365.25-day cycle with a Fourier order of 10.
+- `daily_seasonality=False`: disabled (daily close prices have no intra-day structure).
+- `add_country_holidays("US")`: adds ~11 US federal holidays as additive regressors.
+
+**Implementation.** Rolling one-step evaluation with full refitting every 30 steps. Each refit constructs a new Prophet instance and fits it on all available history up to the current step. No incremental update API exists; the model must be fully reconstructed each time.
+
+**Advantages.** Robust to missing data and outliers; automatically detects trend changepoints; produces interpretable decomposition plots; requires minimal tuning.
+
+**Limitations.** Designed for business/human-activity series (web traffic, sales) with genuine weekly and yearly periodicity. US equity prices do not exhibit meaningful weekly or yearly seasonality — Prophet's seasonality components fit noise, systematically over-project trends, and produce MAPE of 4–52% across the 18 test assets. The worst-case (AMD: 52.1%) occurs for highly volatile semiconductors where trend extrapolation is most misleading. The need to refit from scratch every 30 steps also makes Prophet the second slowest model (12–210 s per asset).
+
+---
+
+### 3.4 LSTM
+
+**Principle.** Long Short-Term Memory (Hochreiter & Schmidhuber, 1997) is a recurrent neural network architecture designed to capture long-range dependencies in sequential data. Each LSTM cell maintains a hidden state and a cell state, controlled by three gates:
+
+- **Forget gate**: decides what fraction of the previous cell state to discard.
+- **Input gate**: decides what new information to write into the cell state.
+- **Output gate**: decides what part of the cell state to expose as the hidden state.
+
+The gating mechanism allows gradients to flow across many time steps without the vanishing gradient problem that affects vanilla RNNs, enabling the network to learn dependencies spanning weeks or months.
+
+**Architecture.**
+
+```
+Input: (batch, 60, 1)           # 60-day sliding window, 1 feature (scaled close)
+  └─ LSTM(input=1, hidden=50)   # Layer 1: 50 hidden units
+  └─ Dropout(0.2)               # Regularisation: 20% random unit drop
+  └─ LSTM(input=50, hidden=50)  # Layer 2: 50 hidden units
+  └─ Dropout(0.2)
+  └─ Linear(50 → 1)             # Fully connected output
+Output: (batch, 1)              # Predicted next-day close (scaled)
+```
+
+**Key hyperparameters.**
+
+| Parameter | Value | Meaning |
+|-----------|-------|---------|
+| `WINDOW` | 60 | Number of past trading days used as input (~3 months) |
+| `hidden` | 50 | Number of hidden units in each LSTM layer |
+| `BATCH` | 32 | Mini-batch size during training |
+| `Dropout` | 0.2 | Fraction of units randomly zeroed per forward pass during training |
+| `EPOCHS` | 100 | Maximum training epochs (early stopping usually triggers earlier) |
+| `patience` | 10 | Early stopping: halt training after 10 epochs without validation loss improvement |
+| `optimizer` | Adam | Adaptive learning rate optimiser |
+| `loss` | MSELoss | Mean squared error on scaled prices |
+
+**Preprocessing.** The close price series is normalised with `StandardScaler` (fitted on training data only). The test evaluation uses **teacher-forcing**: the 60-day input window always contains true historical prices, so prediction errors do not compound over the test horizon. This makes the LSTM evaluation directly comparable to the single-step rolling protocol used by ARIMA and LR.
+
+**Device.** Training runs on an NVIDIA RTX 5070 GPU (CUDA 12.8) via PyTorch 2.x, reducing training time to 6–17 seconds per asset.
+
+**Advantages.** Theoretically capable of learning complex non-linear temporal patterns and long-range dependencies that LR and ARIMA cannot represent. GPU acceleration makes training fast despite model complexity. Dropout and early stopping provide regularisation.
+
+**Limitations.** Learns price levels, not price differences — making it sensitive to distribution shift when training and test periods occupy different price regimes (see Section 6.3). Acts as a black box: model coefficients are not directly interpretable. Requires careful hyperparameter tuning and a sufficiently large training set. On the 18 assets tested, the additional representational capacity confers no directional accuracy advantage over the simpler models.
+
+---
+
+## 4. Analysis Steps and Trials
 
 ### 3.1 Initial Implementation and Flaws Found
 
@@ -139,7 +260,7 @@ All experiments use a global random seed (`seed = 42`) applied to Python's `rand
 
 ---
 
-## 4. Model Evaluation
+## 5. Model Evaluation
 
 ### 4.1 Metrics
 
@@ -187,7 +308,7 @@ All models use rolling one-step prediction on the test set. At each step _t_: pr
 | ACWX | ETF | 0.86 | 0.83 | 6.52 | 0.85 |
 | **Mean (all 18)** | | **1.35** | **1.12** | **15.14** | **14.61** |
 
-Bold LSTM values indicate distribution-shift failure (see Section 4.4).
+Bold LSTM values indicate distribution-shift failure (see Section 5.4).
 
 **LSTM — stable vs. trending asset split**
 
@@ -249,7 +370,7 @@ ARIMA is by far the slowest model. On AEP (1,311 test rows, ~66 full refits), it
 
 ---
 
-## 5. Conclusions
+## 6. Conclusions
 
 ### 5.1 Main Finding
 
